@@ -1,0 +1,310 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: myingress
+  labels:
+    name: myingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$1
+spec:
+  rules:
+# The Ingress is configured to handle “foo.boo.com”
+# In a test environment we must include the Host address in the http header curl -HHost: foo.boo.com "<node_ip>:<ingress_port>"
+# Since we have no DNS binding on our test environment
+  - host: foo.boo.com
+    http:
+      paths:
+        - pathType: Prefix
+          path: "/servicea"
+          backend:
+            service:
+              name: servicea
+              port:
+                number: 80
+  - host: boo.foo.com
+    http:
+      paths:
+        - pathType: Exact
+          path: "/serviceb"
+          backend:
+            service:
+              name: serviceb
+              port: 
+                number: 80
+  - http:
+      paths:
+      - pathType: Prefix
+        path: "/servicea"
+        backend:
+          service:
+            name: servicea
+            port: 
+              number: 80
+      - pathType: Prefix
+        path: "/serviceb"
+        backend:
+          service:
+            name: serviceb
+            port: 
+              number: 80
+  defaultBackend:
+    service:
+      name: servicec
+      port:
+        number: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: servicea
+spec:
+  selector:
+    app: poda
+  ports:
+  - port: 80
+    name: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: serviceb
+spec:
+  selector:
+    app: podb
+  ports:
+  - port: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: servicec
+spec:
+  selector:
+    app: podc
+  ports:
+  - port: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploymenta
+spec:
+  selector:
+    matchLabels:
+      app: poda
+  template:
+    metadata:
+      labels:
+        app: poda
+    spec:
+      containers:
+      - name: myapp
+        image: nginx:latest
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        ports:
+        - containerPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: deploymentb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: podb
+  template:
+    metadata:
+      labels:
+        app: podb
+    spec:
+      initContainers:
+        - name: init-nginx
+          command:
+            - "/bin/bash"
+            - "-c"
+          args:
+            - "echo \"<html><body><h1>Hello World</h1></body></html>\" > /data/index.html"
+          volumeMounts:
+            - name: nginx-initial-page
+              mountPath: /data
+          image: ubuntu:latest
+      containers:
+      - name: myapp
+        image: nginx:latest
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        ports:
+        - containerPort: 80
+        volumeMounts:
+          - name: nginx-initial-page
+            mountPath: /usr/share/nginx/html
+      volumes:
+        - name: nginx-initial-page
+          hostPath:
+            path: /nginx-data-b
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podc
+spec:
+  selector:
+    matchLabels:
+      app: podc
+  template:
+    metadata:
+      labels:
+        app: podc
+    spec:
+      initContainers:
+        - name: init-nginx
+          command:
+            - "/bin/bash"
+            - "-c"
+          args:
+            - "echo \"<html><body><h1>You know What</h1></body></html>\" > /data/index.html"
+          volumeMounts:
+            - name: nginx-initial-page
+              mountPath: /data
+          image: ubuntu:latest
+      containers:
+      - name: myapp
+        image: nginx:latest
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        ports:
+        - containerPort: 80
+        volumeMounts:
+          - name: nginx-initial-page
+            mountPath: /usr/share/nginx/html
+      volumes:
+        - name: nginx-initial-page
+          hostPath:
+            path: /nginx-data-c
+---
+# Istio Gateway
+# Gateway describes a load balancer operating at the edge of the mesh receiving incoming or outgoing HTTP/TCP connections.
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: istio-gateway
+spec:
+  selector:
+    app: istio-ingressgateway # Use istio default controller
+# Server describes the properties of the proxy on a given load balancer port
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*"
+    # - foo.boo.com
+    # - boo.foo.com
+  # - port:
+  #     number: 443
+  #     name: https-443
+  #     protocol: HTTPS
+  #   hosts:
+  #   - uk.bookinfo.com
+  #   - eu.bookinfo.com
+  #   tls:
+  #     mode: SIMPLE # enables HTTPS on this port
+  #     serverCertificate: /etc/certs/servercert.pem
+  #     privateKey: /etc/certs/privatekey.pem
+--- 
+# Configuration for traffic routing
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: istio-virtual-service
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - istio-gateway
+  # - mesh # applies to all the sidecars in the mesh
+  http:
+  - name: servicea-v1
+    match:
+    - uri:
+        prefix: /test
+    rewrite: 
+      uri: "/"
+    route:
+    - destination:
+        host: servicea
+        port:
+          number: 80
+  # Split the traffic using their weight 
+  - name: serviceb-v1
+    route: 
+    - destination: 
+        host: serviceb
+        port: 
+          number: 80
+      weight: 20
+    - destination:
+        host: servicec
+        port:
+          number: 80
+      weight: 80
+
+  # - match:
+  #   - headers:
+  #       cookie:
+  #         exact: "user=dev-123"
+  #   route:
+  #   - destination:
+  #       port:
+  #         number: 7777
+  #       host: reviews.qa.svc.cluster.local
+  # - match:
+  #   - uri:
+  #       prefix: /reviews/
+  #   route:
+  #   - destination:
+  #       port:
+  #         number: 9080 # can be omitted if it's the only port for reviews
+  #       host: reviews.prod.svc.cluster.local
+  #     weight: 80
+  #   - destination:
+  #       host: reviews.qa.svc.cluster.local
+  #     weight: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-svc
+spec:
+  type: NodePort
+  selector:
+    name: test-pod1
+  ports:
+  - port: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: istio-system
+  name: test-pod1
+  labels:
+    name: test-pod1
+spec:
+  containers:
+  - name: test-cont1
+    image: nginx:latest
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "500m"
+    ports:
+      - containerPort: 80
