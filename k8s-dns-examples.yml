@@ -1,0 +1,69 @@
+# Test workload
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dns-test
+  labels: 
+    name: dns-test
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: odin-analyser
+  labels:
+    name: odin-analyser
+  namespace: dns-test
+spec:
+  containers:
+  - name: odin-analyser
+    image: praqma/network-multitool:latest
+    resources:
+      limits:
+        memory: "128Mi"
+        cpu: "500m"
+---
+# Basic k8s DNS examples (A/AAAA and SRV records)
+# Normal Service (with cluster IP)
+# The DNS record A/AAAA should be created targeting the clusterIP
+# The SRV record will exist for port 80
+# A/AAAA record: zeus.dns-test.svc.cluster.local
+# SRV record eternal.tcp.zeus.dns-test.svc.cluster.local 
+apiVersion: v1
+kind: Service
+metadata:
+  name: zeus
+  namespace: dns-test
+spec:
+  selector:
+    app: katana
+  ports:
+  - port: 81
+    name: eternal
+    targetPort: 80
+---
+# A/AAAA record for the pod 172-17-0-11.dns-test.pod.cluster.local
+# A/AAAA record for the pod+deployment ?
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: katana
+  namespace: dns-test
+spec:
+  selector:
+    matchLabels:
+      app: katana
+  template:
+    metadata:
+      name: katana
+      labels:
+        app: katana
+    spec:
+      containers:
+      - name: katana
+        image: nginx
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        ports:
+        - containerPort: 80
